@@ -6,13 +6,12 @@ from logging.handlers import RotatingFileHandler
 from time import strftime, localtime
 import pandas as pd
 import zipfile
-import base64
-import urllib3
 from pathlib import Path
 from cbpi.api import *
 from cbpi.api.config import ConfigType
 from cbpi.api.base import CBPiBase
 import asyncio
+import shortuuid
 
 
 class LogController:
@@ -28,64 +27,53 @@ class LogController:
         self.datalogger = {}
         self.logsFolderPath = self.cbpi.config_folder.logsFolderPath
         self.logger.info("Log folder path  : " + self.logsFolderPath)
+        self.sensor_data_listeners = {}
+    
+    def add_sensor_data_listener(self, method):
+        listener_id = shortuuid.uuid()
+        self.sensor_data_listeners[listener_id] = method
+        return listener_id
+    
+    def remove_sensor_data_listener(self, listener_id):
+        try:
+            del self.sensor_data_listener[listener_id] 
+        except:
+            self.logger.error("Failed to remove listener {}".format(listener_id))
 
-    def log_data(self, name: str, value: str) -> None:
+    async def _call_sensor_data_listeners(self, id, value, formatted_time, name, cleanname):
+        for id, method in self.sensor_data_listeners.items():
+            asyncio.create_task(method(self.cbpi, id, value, formatted_time, name, cleanname))
+
+    def log_data(self, id: str, value: str) -> None:
+        # log to csv first:
         self.logfiles = self.cbpi.config.get("CSVLOGFILES", "Yes")
-        self.influxdb = self.cbpi.config.get("INFLUXDB", "No")
+        formatted_time = strftime("%Y-%m-%d %H:%M:%S", localtime())
         if self.logfiles == "Yes":
-            if name not in self.datalogger:
+            if id not in self.datalogger:
                 max_bytes = int(self.cbpi.config.get("SENSOR_LOG_MAX_BYTES", 100000))
                 backup_count = int(self.cbpi.config.get("SENSOR_LOG_BACKUP_COUNT", 3))
     
-                data_logger = logging.getLogger('cbpi.sensor.%s' % name)
+                data_logger = logging.getLogger('cbpi.sensor.%s' % id)
                 data_logger.propagate = False
                 data_logger.setLevel(logging.DEBUG)
-                handler = RotatingFileHandler(os.path.join(self.logsFolderPath, f"sensor_{name}.log"), maxBytes=max_bytes, backupCount=backup_count)
+                handler = RotatingFileHandler(os.path.join(self.logsFolderPath, f"sensor_{id}.log"), maxBytes=max_bytes, backupCount=backup_count)
                 data_logger.addHandler(handler)
-                self.datalogger[name] = data_logger
+                self.datalogger[id] = data_logger
 
-            formatted_time = strftime("%Y-%m-%d %H:%M:%S", localtime())
-            self.datalogger[name].info("%s,%s" % (formatted_time, str(value)))
-        if self.influxdb == "Yes":
-            self.influxdbcloud = self.cbpi.config.get("INFLUXDBCLOUD", "No")
-            self.influxdbaddr = self.cbpi.config.get("INFLUXDBADDR", None)
-            self.influxdbport = self.cbpi.config.get("INFLUXDBPORT", None)
-            self.influxdbname = self.cbpi.config.get("INFLUXDBNAME", None)
-            self.influxdbuser = self.cbpi.config.get("INFLUXDBUSER", None)
-            self.influxdbpwd = self.cbpi.config.get("INFLUXDBPWD", None)
-            
-            id = name
-            try:
-                chars = {'ö':'oe','ä':'ae','ü':'ue','Ö':'Oe','Ä':'Ae','Ü':'Ue'}
-                sensor=self.cbpi.sensor.find_by_id(name)
-                if sensor is not None:
-                    itemname=sensor.name.replace(" ", "_")
-                    for char in chars:
-                        itemname = itemname.replace(char,chars[char])
-                    out="measurement,source=" + itemname + ",itemID=" + str(id) + " value="+str(value)
-            except Exception as e:
-                logging.error("InfluxDB ID Error: {}".format(e))
-
-            if self.influxdbcloud == "Yes":
-                self.influxdburl="https://" + self.influxdbaddr + "/api/v2/write?org=" + self.influxdbuser + "&bucket=" + self.influxdbname + "&precision=s"
-                try:
-                    header = {'User-Agent': name, 'Authorization': "Token {}".format(self.influxdbpwd)}
-                    http = urllib3.PoolManager()
-                    req = http.request('POST',self.influxdburl, body=out, headers = header)
-                except Exception as e:
-                    logging.error("InfluxDB cloud write Error: {}".format(e))
-
-            else:
-                self.base64string = base64.b64encode(('%s:%s' % (self.influxdbuser,self.influxdbpwd)).encode())
-                self.influxdburl='http://' + self.influxdbaddr + ':' + str(self.influxdbport) + '/write?db=' + self.influxdbname
-                try:
-                    header = {'User-Agent': name, 'Content-Type': 'application/x-www-form-urlencoded','Authorization': 'Basic %s' % self.base64string.decode('utf-8')}
-                    http = urllib3.PoolManager()
-                    req = http.request('POST',self.influxdburl, body=out, headers = header)
-                except Exception as e:
-                    logging.error("InfluxDB write Error: {}".format(e))
-
-
+            self.datalogger[id].info("%s,%s" % (formatted_time, str(value)))
+        # CSV log finished, now clean up user data:
+        try:
+            chars = {'ö':'oe','ä':'ae','ü':'ue','Ö':'Oe','Ä':'Ae','Ü':'Ue'}
+            sensor=self.cbpi.sensor.find_by_id(id)
+            if sensor is not None:
+                name = sensor.name
+                cleanname = name.replace(" ", "_")
+                for char in chars:
+                    cleanname = cleanname.replace(char,chars[char])
+                # call listeners wich clean data:
+                asyncio.create_task(self._call_sensor_data_listeners(id, value, formatted_time, name, cleanname))
+        except Exception as e:
+            logging.error("sensor logging listener data cleanup exception: {}".format(e))
 
     async def get_data(self, names, sample_rate='60s'):
         logging.info("Start Log for {}".format(names))
