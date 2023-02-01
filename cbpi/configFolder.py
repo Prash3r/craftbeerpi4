@@ -8,7 +8,7 @@ import shutil
 import zipfile
 from pathlib import Path
 import glob
-
+import json
 
 class ConfigFolder:
     def __init__(self, configFolderPath, logsFolderPath):
@@ -91,18 +91,18 @@ class ConfigFolder:
             ['actor.json', 'file'],
             ['sensor.json', 'file'],
             ['kettle.json', 'file'],
-            ['fermenter_data.json', 'file'],
-            ['step_data.json', 'file'],
+            #['fermenter_data.json', 'file'], created by fermentation_controller @ start if not available
+            #['step_data.json', 'file'],  created by step_controller @ start if not available
             ['config.json', 'file'],
             ['craftbeerpi.service', 'file'],
             ['chromium.desktop', 'file'],
-            ['dashboard/cbpi_dashboard_1.json', 'file'],
-            ['dashboard/widgets', 'folder'],
             ['dashboard', 'folder'],
+            ['dashboard/widgets', 'folder'],
             ['fermenterrecipes', 'folder'],
             [self.logsFolderPath, 'folder'],
             ['recipes', 'folder'],
             ['upload', 'folder']
+            #['dashboard/cbpi_dashboard_1.json', 'file'] no need to check - can be created with online editor
         ]
         for checking in required_config_content:
             if self.inform_missing_content(self.check_for_file_or_folder(os.path.join(self.configFolderPath, checking[0]), checking[1])):
@@ -117,6 +117,27 @@ class ConfigFolder:
                     print("of course you can also place your config files manually")
                     print("***************************************************")
                 return False
+        
+        # if cbpi_dashboard_1.json doesnt exist at the new location (configFolderPath/dashboard)
+        # we move every cbpi_dashboard_n.json file from the old location (configFolderPath) there.
+        # this could be a config zip file restore from version 4.0.7.a4 or prior.
+        dashboard_1_path = os.path.join(self.configFolderPath, 'dashboard', 'cbpi_dashboard_1.json')
+        if (not (os.path.isfile(dashboard_1_path))) or self.check_for_empty_dashboard_1(dashboard_1_path):
+            for file in glob.glob(os.path.join(self.configFolderPath, 'cbpi_dashboard_*.json')):
+                dashboardFile = os.path.basename(file)
+                print(f"Copy dashboard json file {dashboardFile} from config to config/dashboard folder")
+                shutil.move(file, os.path.join(self.configFolderPath, 'dashboard', dashboardFile))
+
+    def check_for_empty_dashboard_1(self, dashboard_1_path):
+        try:
+            with open(dashboard_1_path, 'r') as f:
+                data = json.load(f)
+            if (len(data['elements']) == 0):  # there may exist some pathes but pathes without elements in dashboard is not very likely
+                return True
+            else:
+                return False
+        except: # file missing or bad json format
+            return True
     
     def inform_missing_content(self, whatsmissing : str):
         if whatsmissing == "":
@@ -162,11 +183,6 @@ class ConfigFolder:
         self.copyDefaultFileIfNotExists("config.json")
         self.copyDefaultFileIfNotExists("craftbeerpi.service")
         self.copyDefaultFileIfNotExists("chromium.desktop")
-
-        if os.path.exists(os.path.join(self.configFolderPath, "dashboard", "cbpi_dashboard_1.json")) is False:
-            srcfile = os.path.join(os.path.dirname(__file__), "config", "dashboard", "cbpi_dashboard_1.json")
-            destfile = os.path.join(self.configFolderPath, "dashboard")
-            shutil.copy(srcfile, destfile)
 
         print("Config Folder created")
 

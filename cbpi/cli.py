@@ -15,8 +15,9 @@ from colorama import Fore, Back, Style
 import importlib
 from importlib_metadata import metadata
 from tabulate import tabulate
-from PyInquirer import prompt, print_json
+from inquirer import prompt
 import platform
+import time
 
 class CraftBeerPiCli():
     def __init__(self, config) -> None:
@@ -99,8 +100,10 @@ class CraftBeerPiCli():
 
         with ZipFile('temp.zip', 'r') as repo_zip:
             repo_zip.extractall()
+        
+        time.sleep(1) # windows dev container permissions problem otherwise
 
-        os.rename("./craftbeerpi4-plugin-template-main", os.path.join(".", name))
+        os.rename(os.path.join(".","craftbeerpi4-plugin-template-main"), os.path.join(".", name))
         os.rename(os.path.join(".", name, "src"), os.path.join(".", name, name))
 
         import jinja2
@@ -236,8 +239,9 @@ def main(context, config_folder_path, logs_folder_path, debug_log_level):
     if logs_folder_path == "":
         logs_folder_path = os.path.join(Path(config_folder_path).absolute().parent, 'logs')
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
-    logging.basicConfig(format=formatter,level=debug_log_level, stream=logging.StreamHandler())
+    logging.basicConfig(format=formatter, stream=logging.StreamHandler())
     logger = logging.getLogger()
+    logger.setLevel(debug_log_level)
     try:
         if not os.path.isdir(logs_folder_path):
             logger.info(f"logs folder '{logs_folder_path}' doesnt exist and we are trying to create it")

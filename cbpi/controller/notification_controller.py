@@ -1,5 +1,7 @@
 import asyncio
+from email import message
 from cbpi.api.dataclasses import NotificationType
+from cbpi.api import *
 import logging
 import shortuuid
 class NotificationController:
@@ -10,8 +12,25 @@ class NotificationController:
         '''
         self.cbpi = cbpi
         self.logger = logging.getLogger(__name__)
+        logging.root.addFilter(self.notify_log_event)
         self.callback_cache = {}    
         self.listener = {}
+    
+    def notify_log_event(self, record):
+        NOTIFY_ON_ERROR = self.cbpi.config.get("NOTIFY_ON_ERROR", "No")
+        if NOTIFY_ON_ERROR == "Yes":
+            try:
+                if record.levelno > 20:
+                    # on log events higher then INFO we want to notify all clients
+                    type = NotificationType.WARNING
+                    if record.levelno > 30:
+                        type = NotificationType.ERROR
+                    self.cbpi.notify(title=f"{record.levelname}", message=record.msg, type = type)
+            except Exception as e:
+                pass
+            finally:
+                return True
+        return True
     
     def add_listener(self, method):
         listener_id = shortuuid.uuid()
@@ -26,11 +45,11 @@ class NotificationController:
 
     async def _call_listener(self, title, message, type, action):
         for id, method in self.listener.items():
-            print(id, method)
+            #print(id, method)
             asyncio.create_task(method(self.cbpi, title, message, type, action ))
 
 
-    def notify(self, title, message: str, type: NotificationType = NotificationType.INFO, action=[]) -> None:
+    def notify(self, title, message: str, type: NotificationType = NotificationType.INFO, action=[], timeout: int=5000) -> None:
         '''
         This is a convinience method to send notification to the client
         
@@ -47,8 +66,8 @@ class NotificationController:
 
         actions = list(map(lambda item: prepare_action(item), action))
         self.callback_cache[notifcation_id] = action
-        self.cbpi.ws.send(dict(id=notifcation_id, topic="notifiaction", type=type.value, title=title, message=message, action=actions))
-        data = dict(type=type.value, title=title, message=message, action=actions)
+        self.cbpi.ws.send(dict(id=notifcation_id, topic="notifiaction", type=type.value, title=title, message=message, action=actions, timeout=timeout))
+        data = dict(type=type.value, title=title, message=message, action=actions, timeout=timeout)
         self.cbpi.push_update(topic="cbpi/notification", data=data)
         asyncio.create_task(self._call_listener(title, message, type, action))
 
